@@ -7,6 +7,7 @@ responses to and from the OpenAI specification.
 """
 
 import abc
+import base64
 import json
 import logging
 import mimetypes
@@ -39,7 +40,21 @@ class OpenAIModel(Model, abc.ABC):
 
         Returns:
             OpenAI compatible content block.
+
+        Raises:
+            TypeError: If the content block type cannot be converted to an OpenAI-compatible format.
         """
+        if "document" in content:
+            mime_type = mimetypes.types_map.get(f".{content['document']['format']}", "application/octet-stream")
+            file_data = base64.b64encode(content["document"]["source"]["bytes"]).decode("utf-8")
+            return {
+                "file": {
+                    "file_data": f"data:{mime_type};base64,{file_data}",
+                    "filename": content["document"]["name"],
+                },
+                "type": "file",
+            }
+
         if "image" in content:
             mime_type = mimetypes.types_map.get(f".{content['image']['format']}", "application/octet-stream")
             image_data = content["image"]["source"]["bytes"].decode("utf-8")
@@ -55,7 +70,7 @@ class OpenAIModel(Model, abc.ABC):
         if "text" in content:
             return {"text": content["text"], "type": "text"}
 
-        return {"text": json.dumps(content), "type": "text"}
+        raise TypeError(f"content_type=<{next(iter(content))}> | unsupported type")
 
     @staticmethod
     def format_request_message_tool_call(tool_use: ToolUse) -> dict[str, Any]:
@@ -151,6 +166,10 @@ class OpenAIModel(Model, abc.ABC):
 
         Returns:
             An OpenAI compatible chat streaming request.
+
+        Raises:
+            TypeError: If a message contains a content block type that cannot be converted to an OpenAI-compatible
+                format.
         """
         return {
             "messages": self.format_request_messages(messages, system_prompt),
@@ -206,7 +225,9 @@ class OpenAIModel(Model, abc.ABC):
 
             case "content_delta":
                 if event["data_type"] == "tool":
-                    return {"contentBlockDelta": {"delta": {"toolUse": {"input": event["data"].function.arguments}}}}
+                    return {
+                        "contentBlockDelta": {"delta": {"toolUse": {"input": event["data"].function.arguments or ""}}}
+                    }
 
                 return {"contentBlockDelta": {"delta": {"text": event["data"]}}}
 

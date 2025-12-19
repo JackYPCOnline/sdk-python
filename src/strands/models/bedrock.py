@@ -621,6 +621,7 @@ class BedrockModel(Model):
         messages: Messages,
         tool_specs: Optional[list[ToolSpec]] = None,
         system_prompt: Optional[str] = None,
+        breaking_change: str,
         *,
         tool_choice: ToolChoice | None = None,
         system_prompt_content: Optional[list[SystemContentBlock]] = None,

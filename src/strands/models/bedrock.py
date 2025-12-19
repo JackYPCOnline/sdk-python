@@ -193,6 +193,7 @@ class BedrockModel(Model):
     def _format_request(
         self,
         messages: Messages,
+        breaking_change:str,
         tool_specs: Optional[list[ToolSpec]] = None,
         system_prompt_content: Optional[list[SystemContentBlock]] = None,
         tool_choice: ToolChoice | None = None,
@@ -696,7 +697,7 @@ class BedrockModel(Model):
         """
         try:
             logger.debug("formatting request")
-            request = self._format_request(messages, tool_specs, system_prompt_content, tool_choice)
+            request = self._format_request(messages,"Breaking_change", tool_specs, system_prompt_content, tool_choice)
             logger.debug("request=<%s>", request)
 
             logger.debug("invoking model")

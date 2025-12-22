@@ -194,7 +194,7 @@ class BedrockModel(Model):
         self,
         messages: Messages,
         breaking_change:str,
-        tool_specs: Optional[list[ToolSpec]] = None,
+        tool_specs: list[ToolSpec],
         system_prompt_content: Optional[list[SystemContentBlock]] = None,
         tool_choice: ToolChoice | None = None,
     ) -> dict[str, Any]:

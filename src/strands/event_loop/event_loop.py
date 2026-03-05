@@ -41,6 +41,8 @@ from ..types.exceptions import (
 )
 from ..types.streaming import StopReason
 from ..types.tools import ToolResult, ToolUse
+import asyncio
+from ..agent.durability import Durability
 from ._recover_message_on_max_tokens_reached import recover_message_on_max_tokens_reached
 from ._retry import ModelRetryStrategy
 from .streaming import stream_messages
@@ -328,16 +330,37 @@ async def _handle_model_execution(
             else:
                 tool_specs = agent.tool_registry.get_all_tool_specs()
             try:
-                async for event in stream_messages(
-                    agent.model,
-                    agent.system_prompt,
-                    agent.messages,
-                    tool_specs,
-                    system_prompt_content=agent._system_prompt_content,
-                    tool_choice=structured_output_context.tool_choice,
-                    invocation_state=invocation_state,
-                ):
+                if type(agent.durability) is not Durability:
+                    # Durability active — wrap_model_call receives a fn(messages, system_prompt, tool_specs)
+                    # that returns (stop_reason, message). The wrapper checkpoints it.
+                    async def _call_model(messages, system_prompt, tool_specs):
+                        async for ev in stream_messages(
+                            agent.model, system_prompt, messages, tool_specs,
+                            system_prompt_content=agent._system_prompt_content,
+                            tool_choice=structured_output_context.tool_choice,
+                            invocation_state=invocation_state,
+                        ):
+                            pass
+                        sr, msg, *_ = ev["stop"]
+                        return sr, msg
+                    wrapped = agent.durability.wrap_model_call(_call_model)
+                    stop_reason, message = await wrapped(agent.messages, agent.system_prompt, tool_specs)
+                    from ..types.streaming import Usage, Metrics
+                    usage = Usage(inputTokens=0, outputTokens=0, totalTokens=0)
+                    metrics = Metrics(latencyMs=0)
+                    event = ModelStopReason(stop_reason=stop_reason, message=message, usage=usage, metrics=metrics)
                     yield event
+                else:
+                    async for event in stream_messages(
+                        agent.model,
+                        agent.system_prompt,
+                        agent.messages,
+                        tool_specs,
+                        system_prompt_content=agent._system_prompt_content,
+                        tool_choice=structured_output_context.tool_choice,
+                        invocation_state=invocation_state,
+                    ):
+                        yield event
 
                 stop_reason, message, usage, metrics = event["stop"]
                 invocation_state.setdefault("request_state", {})
@@ -465,14 +488,31 @@ async def _handle_tool_execution(
         tool_uses = [tool_use for tool_use in tool_uses if tool_use["toolUseId"] not in tool_use_ids]
 
     interrupts = []
-    tool_events = agent.tool_executor._execute(
-        agent, tool_uses, tool_results, cycle_trace, cycle_span, invocation_state, structured_output_context
-    )
-    async for tool_event in tool_events:
-        if isinstance(tool_event, ToolInterruptEvent):
-            interrupts.extend(tool_event["tool_interrupt_event"]["interrupts"])
+    if type(agent.durability) is not Durability:
+        # Durability active — wrap_tool_call receives a fn(tool_name, tool_input, tool_use_id)
+        # that returns a ToolResult dict. The wrapper checkpoints it.
+        async def _call_tool(tool_name, tool_input, tool_use_id):
+            tool_info = agent.tool_registry.dynamic_tools.get(tool_name)
+            tool_fn = tool_info if tool_info is not None else agent.tool_registry.registry.get(tool_name)
+            if tool_fn is None:
+                return {"toolUseId": tool_use_id, "content": [{"text": f"Unknown tool: {tool_name}"}], "status": "error"}
+            raw = tool_fn(**tool_input)
+            if asyncio.iscoroutine(raw):
+                raw = await raw
+            return {"toolUseId": tool_use_id, "content": [{"text": str(raw)}], "status": "success"}
 
-        yield tool_event
+        wrapped_tool = agent.durability.wrap_tool_call(_call_tool)
+        for tool_use in tool_uses:
+            result = await wrapped_tool(tool_use["name"], tool_use["input"], tool_use["toolUseId"])
+            tool_results.append(result)
+    else:
+        tool_events = agent.tool_executor._execute(
+            agent, tool_uses, tool_results, cycle_trace, cycle_span, invocation_state, structured_output_context
+        )
+        async for tool_event in tool_events:
+            if isinstance(tool_event, ToolInterruptEvent):
+                interrupts.extend(tool_event["tool_interrupt_event"]["interrupts"])
+            yield tool_event
 
     structured_output_result = None
     if structured_output_context.is_enabled:

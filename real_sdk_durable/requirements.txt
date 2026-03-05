@@ -1,0 +1,7 @@
+temporalio>=1.9.0
+
+# Strands SDK — install from local patched source (durability= param required):
+#   pip install -e /Volumes/workplace/Strands/sdk-python
+#
+# Or from PyPI once the feature ships:
+#   pip install strands-agents

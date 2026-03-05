@@ -64,6 +64,7 @@ from ..types.exceptions import ConcurrencyException, ContextWindowOverflowExcept
 from ..types.traces import AttributeValue
 from .agent_result import AgentResult
 from .base import AgentBase
+from .durability import Durability
 from .conversation_manager import (
     ConversationManager,
     SlidingWindowConversationManager,
@@ -133,6 +134,7 @@ class Agent(AgentBase):
         session_manager: SessionManager | None = None,
         structured_output_prompt: str | None = None,
         tool_executor: ToolExecutor | None = None,
+        durability: Durability | None = None,
         retry_strategy: ModelRetryStrategy | _DefaultRetryStrategySentinel | None = _DEFAULT_RETRY_STRATEGY,
         concurrent_invocation_mode: ConcurrentInvocationMode = ConcurrentInvocationMode.THROW,
     ):
@@ -205,7 +207,10 @@ class Agent(AgentBase):
         Raises:
             ValueError: If agent id contains path separators.
         """
-        self.model = BedrockModel() if not model else BedrockModel(model_id=model) if isinstance(model, str) else model
+        if model is None and durability is not None and type(durability) is not Durability:
+            self.model = None  # model never called directly when durability is active
+        else:
+            self.model = BedrockModel() if not model else BedrockModel(model_id=model) if isinstance(model, str) else model
         self.messages = messages if messages is not None else []
         # initializing self._system_prompt for backwards compatibility
         self._system_prompt, self._system_prompt_content = self._initialize_system_prompt(system_prompt)
@@ -316,6 +321,7 @@ class Agent(AgentBase):
         self.hooks.add_hook(self._retry_strategy)
 
         self.tool_executor = tool_executor or ConcurrentToolExecutor()
+        self.durability = durability or Durability()
 
         if hooks:
             for hook in hooks:
